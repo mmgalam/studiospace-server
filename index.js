@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import { MongoClient, ObjectId } from "mongodb";
 
@@ -10,6 +11,30 @@ app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
+const isProd = process.env.NODE_ENV === "production";
+const cookieOptions = {
+  httpOnly: true,
+  secure: isProd,
+  sameSite: "lax",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: "/",
+};
+
+const verifyToken = (req, res, next) => {
+  const token = req.cookies?.token;
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorized: please log in." });
+  }
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    return res
+      .status(401)
+      .json({ message: "Unauthorized: your session has expired." });
+  }
+};
+
 const client = new MongoClient(process.env.MONGODB_URI);
 
 async function start() {
@@ -17,8 +42,47 @@ async function start() {
   const db = client.db("studiospace");
   const studios = db.collection("studios");
   const bookings = db.collection("bookings");
+  const sessions = db.collection("session");
+  const users = db.collection("user");
 
   app.get("/", (req, res) => res.send("StudioSpace API running"));
+
+  // BetterAuth session যাচাই করে JWT cookie দেওয়া
+  app.post("/api/auth/token", async (req, res) => {
+    const raw =
+      req.cookies?.["better-auth.session_token"] ??
+      req.cookies?.["__Secure-better-auth.session_token"];
+    if (!raw) return res.status(401).json({ message: "Not logged in." });
+
+    const sessionToken = raw.split(".")[0];
+    const session = await sessions.findOne({ token: sessionToken });
+    if (!session || new Date(session.expiresAt) < new Date()) {
+      return res.status(401).json({ message: "Session not found or expired." });
+    }
+
+    const uid = String(session.userId);
+    const ids = [uid];
+    if (ObjectId.isValid(uid)) ids.push(new ObjectId(uid));
+    const user = await users.findOne({
+      $or: [{ _id: { $in: ids } }, { id: uid }],
+    });
+    if (!user) return res.status(401).json({ message: "User not found." });
+
+    const token = jwt.sign(
+      { email: user.email, name: user.name },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "7d",
+      },
+    );
+    res.cookie("token", token, cookieOptions);
+    res.json({ ok: true });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    res.clearCookie("token", { ...cookieOptions, maxAge: undefined });
+    res.json({ ok: true });
+  });
 
   // Home: top-rated 6
   app.get("/api/studios/featured", async (req, res) => {
@@ -27,8 +91,8 @@ async function start() {
   });
 
   // নিজের studio-র তালিকা
-  app.get("/api/my-studios", async (req, res) => {
-    const { email } = req.query;
+  app.get("/api/my-studios", verifyToken, async (req, res) => {
+    const email = req.user.email;
     if (!email) return res.status(400).json({ message: "Email is required." });
     const data = await studios
       .find({ ownerEmail: email })
@@ -56,7 +120,7 @@ async function start() {
   });
 
   // নতুন studio যোগ
-  app.post("/api/studios", async (req, res) => {
+  app.post("/api/studios", verifyToken, async (req, res) => {
     const {
       title,
       category,
@@ -67,10 +131,10 @@ async function start() {
       image,
       amenities,
       overview,
-      ownerName,
-      ownerEmail,
     } = req.body;
 
+    const ownerEmail = req.user.email;
+    const ownerName = req.user.name;
     const rate = Number(hourlyRate);
     const deposit = Number(securityDeposit);
     const capacity = Number(maxCapacity);
@@ -116,11 +180,11 @@ async function start() {
   });
 
   // studio মুছে ফেলা
-  app.delete("/api/studios/:id", async (req, res) => {
+  app.delete("/api/studios/:id", verifyToken, async (req, res) => {
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: "Invalid id" });
     }
-    const { email } = req.query;
+    const email = req.user.email;
     if (!email) return res.status(400).json({ message: "Email is required." });
 
     const result = await studios.deleteOne({
@@ -136,7 +200,7 @@ async function start() {
   });
 
   // studio আপডেট
-  app.put("/api/studios/:id", async (req, res) => {
+  app.put("/api/studios/:id", verifyToken, async (req, res) => {
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: "Invalid id" });
     }
@@ -151,8 +215,9 @@ async function start() {
       image,
       amenities,
       overview,
-      email,
     } = req.body;
+
+    const email = req.user.email;
 
     if (!email) return res.status(400).json({ message: "Email is required." });
 
@@ -204,9 +269,10 @@ async function start() {
   });
 
   // নতুন booking (double-booking প্রতিরোধসহ)
-  app.post("/api/bookings", async (req, res) => {
-    const { studioId, date, startTime, endTime, userEmail, userName } =
-      req.body;
+  app.post("/api/bookings", verifyToken, async (req, res) => {
+    const { studioId, date, startTime, endTime } = req.body;
+    const userEmail = req.user.email;
+    const userName = req.user.name;
 
     if (!ObjectId.isValid(studioId)) {
       return res.status(400).json({ message: "Invalid studio." });
@@ -284,8 +350,8 @@ async function start() {
   });
 
   // নিজের booking-এর তালিকা
-  app.get("/api/my-bookings", async (req, res) => {
-    const { email } = req.query;
+  app.get("/api/my-bookings", verifyToken, async (req, res) => {
+    const email = req.user.email;
     if (!email) return res.status(400).json({ message: "Email is required." });
     const data = await bookings
       .find({ userEmail: email })
@@ -295,11 +361,11 @@ async function start() {
   });
 
   // Pending booking বাতিল
-  app.patch("/api/bookings/:id/cancel", async (req, res) => {
+  app.patch("/api/bookings/:id/cancel", verifyToken, async (req, res) => {
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: "Invalid id" });
     }
-    const { email } = req.body;
+    const email = req.user.email;
     if (!email) return res.status(400).json({ message: "Email is required." });
 
     const result = await bookings.updateOne(
