@@ -380,6 +380,61 @@ async function start() {
     res.json({ cancelled: true });
   });
 
+  // আমার studio-গুলোর জন্য আসা booking request (host-এর দৃষ্টিকোণ)
+  app.get("/api/host-bookings", verifyToken, async (req, res) => {
+    const data = await bookings
+      .find({ hostEmail: req.user.email })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.json(data);
+  });
+
+  // host-এর status বদল: Pending -> Confirmed, Confirmed -> Completed
+  app.patch("/api/bookings/:id/status", verifyToken, async (req, res) => {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+    const { status } = req.body;
+    const allowed = { Confirmed: "Pending", Completed: "Confirmed" };
+    if (!allowed[status]) {
+      return res.status(400).json({ message: "Invalid status." });
+    }
+
+    const booking = await bookings.findOne({
+      _id: new ObjectId(req.params.id),
+      hostEmail: req.user.email,
+      status: allowed[status],
+    });
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ message: "Booking not found or cannot be updated." });
+    }
+
+    // Confirm করার সময়ও overlap যাচাই (Challenge 2)
+    if (status === "Confirmed") {
+      const conflict = await bookings.findOne({
+        _id: { $ne: booking._id },
+        studioId: booking.studioId,
+        date: booking.date,
+        status: "Confirmed",
+        startTime: { $lt: booking.endTime },
+        endTime: { $gt: booking.startTime },
+      });
+      if (conflict) {
+        return res.status(409).json({
+          message: `Another confirmed booking already covers ${conflict.startTime} to ${conflict.endTime} on that date.`,
+        });
+      }
+    }
+
+    await bookings.updateOne(
+      { _id: booking._id },
+      { $set: { status, updatedAt: new Date() } },
+    );
+    res.json({ updated: true });
+  });
+
   app.listen(process.env.PORT, () => {
     console.log(`Server running on port ${process.env.PORT}`);
   });
