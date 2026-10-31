@@ -43,6 +43,47 @@ async function start() {
     res.json(studio);
   });
 
+    // নতুন studio যোগ
+  app.post('/api/studios', async (req, res) => {
+    const {
+      title, category, hourlyRate, securityDeposit, maxCapacity,
+      location, image, amenities, overview, ownerName, ownerEmail,
+    } = req.body;
+
+    const rate = Number(hourlyRate);
+    const deposit = Number(securityDeposit);
+    const capacity = Number(maxCapacity);
+
+    if (!title?.trim() || !category || !location?.trim() || !image || !overview?.trim()) {
+      return res.status(400).json({ message: 'Please fill in all required fields.' });
+    }
+    if (!ownerEmail || !ownerName) {
+      return res.status(400).json({ message: 'Host information is missing.' });
+    }
+    if (!(rate > 0) || !(deposit >= 0) || !(capacity > 0)) {
+      return res.status(400).json({ message: 'Rate, deposit and capacity must be valid numbers.' });
+    }
+
+    const doc = {
+      title: title.trim(),
+      category,
+      hourlyRate: rate,
+      securityDeposit: deposit,
+      maxCapacity: capacity,
+      location: location.trim(),
+      image,
+      amenities: Array.isArray(amenities) ? amenities : [],
+      overview: overview.trim(),
+      rating: 0,
+      ownerName,
+      ownerEmail,
+      createdAt: new Date(),
+    };
+
+    const result = await studios.insertOne(doc);
+    res.status(201).json({ insertedId: result.insertedId });
+  });
+
   app.listen(process.env.PORT, () => {
     console.log(`Server running on port ${process.env.PORT}`);
   });
