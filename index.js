@@ -110,6 +110,54 @@ async function start() {
     res.json({ deleted: true });
   });
 
+  // studio আপডেট
+  app.put('/api/studios/:id', async (req, res) => {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid id' });
+    }
+
+    const {
+      title, category, hourlyRate, securityDeposit, maxCapacity,
+      location, image, amenities, overview, email,
+    } = req.body;
+
+    if (!email) return res.status(400).json({ message: 'Email is required.' });
+
+    const rate = Number(hourlyRate);
+    const deposit = Number(securityDeposit);
+    const capacity = Number(maxCapacity);
+
+    if (!title?.trim() || !category || !location?.trim() || !image || !overview?.trim()) {
+      return res.status(400).json({ message: 'Please fill in all required fields.' });
+    }
+    if (!(rate > 0) || !(deposit >= 0) || !(capacity > 0)) {
+      return res.status(400).json({ message: 'Rate, deposit and capacity must be valid numbers.' });
+    }
+
+    const result = await studios.updateOne(
+      { _id: new ObjectId(req.params.id), ownerEmail: email },
+      {
+        $set: {
+          title: title.trim(),
+          category,
+          hourlyRate: rate,
+          securityDeposit: deposit,
+          maxCapacity: capacity,
+          location: location.trim(),
+          image,
+          amenities: Array.isArray(amenities) ? amenities : [],
+          overview: overview.trim(),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: 'Studio not found or you are not the owner.' });
+    }
+    res.json({ updated: true });
+  });
+
   app.listen(process.env.PORT, () => {
     console.log(`Server running on port ${process.env.PORT}`);
   });
