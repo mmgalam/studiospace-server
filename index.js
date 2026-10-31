@@ -25,6 +25,14 @@ async function start() {
     res.json(data);
   });
 
+  // নিজের studio-র তালিকা
+  app.get('/api/my-studios', async (req, res) => {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ message: 'Email is required.' });
+    const data = await studios.find({ ownerEmail: email }).sort({ createdAt: -1 }).toArray();
+    res.json(data);
+  });
+
   // সব studio (category ও search সহ)
   app.get('/api/studios', async (req, res) => {
     const { category, search } = req.query;
@@ -82,6 +90,24 @@ async function start() {
 
     const result = await studios.insertOne(doc);
     res.status(201).json({ insertedId: result.insertedId });
+  });
+
+  // studio মুছে ফেলা
+  app.delete('/api/studios/:id', async (req, res) => {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid id' });
+    }
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ message: 'Email is required.' });
+
+    const result = await studios.deleteOne({
+      _id: new ObjectId(req.params.id),
+      ownerEmail: email,
+    });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: 'Studio not found or you are not the owner.' });
+    }
+    res.json({ deleted: true });
   });
 
   app.listen(process.env.PORT, () => {
