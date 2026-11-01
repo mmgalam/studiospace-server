@@ -36,7 +36,7 @@ const verifyToken = (req, res, next) => {
 };
 
 const client = new MongoClient(process.env.MONGODB_URI);
-let studios, bookings, sessions, users;
+let studios, bookings, sessions, users, wishlist;
 
 // প্রতিটি request-এর আগে connection প্রস্তুত নিশ্চিত করা (Vercel serverless-এর জন্য)
 async function init() {
@@ -47,6 +47,7 @@ async function init() {
     bookings = db.collection("bookings");
     sessions = db.collection("session");
     users = db.collection("user");
+    wishlist = db.collection("wishlist");
   }
 }
 
@@ -442,6 +443,47 @@ app.patch("/api/bookings/:id/status", verifyToken, async (req, res) => {
     { $set: { status, updatedAt: new Date() } },
   );
   res.json({ updated: true });
+});
+
+// আমার wishlist-এর studio id তালিকা
+app.get("/api/wishlist", verifyToken, async (req, res) => {
+  const items = await wishlist.find({ userEmail: req.user.email }).toArray();
+  res.json(items.map((i) => i.studioId));
+});
+
+// wishlist-এ যোগ
+app.post("/api/wishlist/:studioId", verifyToken, async (req, res) => {
+  if (!ObjectId.isValid(req.params.studioId)) {
+    return res.status(400).json({ message: "Invalid studio." });
+  }
+  await wishlist.updateOne(
+    { userEmail: req.user.email, studioId: req.params.studioId },
+    { $setOnInsert: { createdAt: new Date() } },
+    { upsert: true },
+  );
+  res.status(201).json({ saved: true });
+});
+
+// wishlist থেকে সরানো
+app.delete("/api/wishlist/:studioId", verifyToken, async (req, res) => {
+  await wishlist.deleteOne({
+    userEmail: req.user.email,
+    studioId: req.params.studioId,
+  });
+  res.json({ removed: true });
+});
+
+// wishlist-এর studio-র পূর্ণ তথ্য
+app.get("/api/wishlist/studios", verifyToken, async (req, res) => {
+  const items = await wishlist.find({ userEmail: req.user.email }).toArray();
+  const ids = items
+    .map((i) => i.studioId)
+    .filter((id) => ObjectId.isValid(id))
+    .map((id) => new ObjectId(id));
+  const data = ids.length
+    ? await studios.find({ _id: { $in: ids } }).toArray()
+    : [];
+  res.json(data);
 });
 
 // লোকালে চালানোর জন্য (Vercel-এ এটা চলবে না)
